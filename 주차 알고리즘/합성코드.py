@@ -1,5 +1,5 @@
-import time
 import RPi.GPIO as GPIO
+import time
 
 # 차량 종류 상수
 WHITE = '일반 차량'
@@ -18,21 +18,18 @@ sensor_pins = {
 
 # 주차 상태 초기화
 parking_zones = {zone: [0, 0, 0] for zone in sensor_pins}
-white_toggle = True
 
-# GPIO 초기 설정
+# GPIO 세팅
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
-
 for zone in sensor_pins:
     for sensor in sensor_pins[zone]:
         GPIO.setup(sensor['TRIG'], GPIO.OUT)
         GPIO.setup(sensor['ECHO'], GPIO.IN)
         GPIO.output(sensor['TRIG'], False)
 
-time.sleep(2)
+time.sleep(2)  # 센서 안정화
 
-# 거리 측정
 def measure_distance(trig, echo):
     GPIO.output(trig, True)
     time.sleep(0.00001)
@@ -43,20 +40,22 @@ def measure_distance(trig, echo):
 
     while GPIO.input(echo) == 0 and time.time() < timeout:
         start = time.time()
+
     while GPIO.input(echo) == 1 and time.time() < timeout:
         stop = time.time()
 
     elapsed = stop - start
-    return elapsed * 34300 / 2
+    distance = elapsed * 34300 / 2
+    return distance
 
-# 빈 자리 찾기
 def find_empty_spot(zone_name):
     for i in range(3):
         if parking_zones[zone_name][i] == 0:
             return i
     return None
 
-# 입차 처리
+white_toggle = True
+
 def assign_parking(car_type):
     global white_toggle
     assigned = False
@@ -74,6 +73,7 @@ def assign_parking(car_type):
                 assigned_spot = spot
                 assigned = True
                 break
+
     elif car_type == BLUE:
         spot = find_empty_spot('전기차')
         if spot is not None:
@@ -81,6 +81,7 @@ def assign_parking(car_type):
             assigned_zone = '전기차'
             assigned_spot = spot
             assigned = True
+
     elif car_type == MARK:
         spot = find_empty_spot('장애인')
         if spot is not None:
@@ -90,40 +91,63 @@ def assign_parking(car_type):
             assigned = True
 
     if assigned:
-        print(f"\n✅ 차량 종류: {car_type}")
-        print(f"🅿️ '{assigned_zone}'의 {assigned_spot + 1}번 자리에 주차되었습니다.")
+        print(f"✅ 차량 종류: {car_type}")
+        print(f"🅿️ '{assigned_zone}' 구역 {assigned_spot + 1}번 자리에 주차되었습니다.")
+        current_status = parking_zones[assigned_zone]
+        empty_count = current_status.count(0)
+        print(f"📊 현재 '{assigned_zone}' 주차 현황: {empty_count}/3 자리 비어 있음 -> {current_status}\n")
     else:
-        print(f"\n❌ {car_type} 차량을 위한 빈 자리가 없습니다.")
+        print(f"❌ {car_type}을(를) 위한 주차 공간이 모두 찼습니다.\n")
 
-# 센서로 주차 상태 갱신
-def update_parking_from_sensor():
+def remove_parking(zone_name, spot_number):
+    if zone_name not in parking_zones:
+        print(f"❌ '{zone_name}' 구역이 존재하지 않습니다.\n")
+        return
+    
+    spot_index = spot_number - 1
+    if spot_index < 0 or spot_index >= len(parking_zones[zone_name]):
+        print(f"❌ 자리 번호가 올바르지 않습니다. 1 ~ {len(parking_zones[zone_name])} 사이여야 합니다.\n")
+        return
+    
+    if parking_zones[zone_name][spot_index] == 0:
+        print(f"❌ 해당 자리({spot_number}번)는 이미 비어 있습니다.\n")
+    else:
+        parking_zones[zone_name][spot_index] = 0
+        print(f"✅ '{zone_name}' 구역 {spot_number}번 자리 차량이 출차되었습니다.")
+        current_status = parking_zones[zone_name]
+        empty_count = current_status.count(0)
+        print(f"📊 '{zone_name}' 주차 현황: {empty_count}/3 자리 비어 있음 -> {current_status}\n")
+
+def print_parking_status():
+    print("\n📡 센서 거리 측정 중...")
     for zone in sensor_pins:
-        for i, sensor in enumerate(sensor_pins[zone]):
-            dist = measure_distance(sensor['TRIG'], sensor['ECHO'])
-            parking_zones[zone][i] = 1 if dist <= 25 else 0
+        empty_count = parking_zones[zone].count(0)
+        print(f"🅿️ {zone}: {parking_zones[zone]} (빈 자리 {empty_count}/3)")
+    print()  # 한 줄 띄움
 
-# 상태 출력
-def print_current_status():
-    print("\n📊 실시간 주차 상태:")
-    for zone, spots in parking_zones.items():
-        print(f" - {zone}: {spots}")
-
-# 메인 루프
 try:
     while True:
-        update_parking_from_sensor()
-        print_current_status()
+        # 센서로 거리 측정 및 주차 상태 갱신
+        for zone in sensor_pins:
+            for i, sensor in enumerate(sensor_pins[zone]):
+                dist = measure_distance(sensor['TRIG'], sensor['ECHO'])
+                parking_zones[zone][i] = 1 if dist <= 25 else 0
+        print_parking_status()
 
-        # 사용자 입차 요청
-        action = input("\n🚗 차량을 입차하시겠습니까? (예/아니오): ").strip()
-        if action == '예':
+        action = input("🚦 입차 또는 종료를 입력하세요: ").strip()
+        if action == "종료":
+            break
+        elif action == "입차":
             car_type = input("차량 종류를 입력하세요 (일반 차량 / 전기 차량 / 장애인 차량): ").strip()
-            if car_type in [WHITE, BLUE, MARK]:
-                assign_parking(car_type)
+            if car_type not in [WHITE, BLUE, MARK]:
+                print("⚠️ 올바른 차량 종류를 입력하세요.\n")
             else:
-                print("⚠️ 올바른 차량 종류를 입력하세요.")
-        time.sleep(2)
+                assign_parking(car_type)
+        else:
+            print("⚠️ '입차' 또는 '종료' 중 하나를 입력하세요.\n")
 
 except KeyboardInterrupt:
-    print("\n🛑 종료: GPIO 정리")
+    print("\n🛑 프로그램 종료, GPIO 정리 중...")
+
+finally:
     GPIO.cleanup()
