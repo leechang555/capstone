@@ -1,28 +1,67 @@
-#!/usr/bin/python
-
-# MIT License
-# 
-# Copyright (c) 2017 John Bryan Moore
-
+import RPi.GPIO as GPIO
 import time
-import VL53L0X
 
-# Create a VL53L0X object
-tof = VL53L0X.VL53L0X()
+# 🧩 각 주차 구역 자리마다 센서 핀(TRIG, ECHO) 설정
+sensor_pins = {
+    'T1A': [{'TRIG': 23, 'ECHO': 24}, {'TRIG': 27, 'ECHO': 22}, {'TRIG': 5,  'ECHO': 6}],
+    'T1B': [{'TRIG': 17, 'ECHO': 18}, {'TRIG': 12, 'ECHO': 16}, {'TRIG': 20, 'ECHO': 21}],
+    'T2A': [{'TRIG': 13, 'ECHO': 19}, {'TRIG': 26, 'ECHO': 4},  {'TRIG': 25, 'ECHO': 8}],
+    'T2B': [{'TRIG': 7,  'ECHO': 1},  {'TRIG': 9,  'ECHO': 10}, {'TRIG': 11, 'ECHO': 14}],
+    '전기차': [{'TRIG': 15, 'ECHO': 2}, {'TRIG': 3,  'ECHO': 28}, {'TRIG': 29, 'ECHO': 30}],
+    '장애인': [{'TRIG': 31, 'ECHO': 32}, {'TRIG': 33, 'ECHO': 34}, {'TRIG': 35, 'ECHO': 36}]
+}
 
-# Start ranging
-tof.start_ranging(VL53L0X.VL53L0X_BETTER_ACCURACY_MODE)
+# 🅿️ 각 자리의 주차 상태를 저장 (0: 빈 자리, 1: 차량 있음)
+parking_zones = {
+    zone: [0, 0, 0] for zone in sensor_pins
+}
 
-timing = tof.get_timing()
-if (timing < 20000):
-    timing = 20000
-# print ("Timing %d ms" % (timing/1000))
+# 🧰 라즈베리파이 GPIO 설정
+GPIO.setmode(GPIO.BCM)        # BCM 번호 체계 사용
+GPIO.setwarnings(False)       # 경고 메시지 끄기
 
-for count in range(1,2):
-    distance = tof.get_distance()
-    if (distance > 0):
-        print ("%d mm, %d cm, %d" % (distance, (distance/10), count))
+# 🔧 모든 센서 핀 초기화
+for zone in sensor_pins:
+    for sensor in sensor_pins[zone]:
+        GPIO.setup(sensor['TRIG'], GPIO.OUT)
+        GPIO.setup(sensor['ECHO'], GPIO.IN)
+        GPIO.output(sensor['TRIG'], False)  # TRIG 초기값은 LOW
 
-    time.sleep(timing/1000000.00)
+time.sleep(2)  # 센서 안정화 대기
 
-tof.stop_ranging()
+# 📏 거리 측정 함수 (센서 하나에 대해 실행)
+def measure_distance(trig, echo):
+    GPIO.output(trig, True)
+    time.sleep(0.00001)  # 10마이크로초 펄스
+    GPIO.output(trig, False)
+
+    start = time.time()
+    timeout = start + 0.04  # 40ms 이상은 무시
+
+    # ECHO 핀 LOW → HIGH 될 때까지 대기
+    while GPIO.input(echo) == 0 and time.time() < timeout:
+        start = time.time()
+
+    # ECHO 핀 HIGH → LOW 될 때까지 대기
+    while GPIO.input(echo) == 1 and time.time() < timeout:
+        stop = time.time()
+
+    elapsed = stop - start
+    distance = elapsed * 34300 / 2  # 왕복 거리 → cm로 환산
+    return distance
+
+# 🔁 계속 반복하면서 주차 상태 확인
+try:
+    while True:
+        print("\n📡 센서 거리 측정 중...")
+        for zone in sensor_pins:
+            for i, sensor in enumerate(sensor_pins[zone]):
+                dist = measure_distance(sensor['TRIG'], sensor['ECHO'])
+                # 25cm 이하일 경우 차량 있음(1), 아니면 없음(0)
+                parking_zones[zone][i] = 1 if dist <= 25 else 0
+            print(f"🅿️ {zone}: {parking_zones[zone]}")
+        time.sleep(2)  # 2초마다 반복
+
+except KeyboardInterrupt:
+    print("\n🛑 프로그램 종료, GPIO 정리")
+    GPIO.cleanup()
