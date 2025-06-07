@@ -1,33 +1,50 @@
-import RPi.GPIO as GPIO
-import time
+import threading
+import cv2
+from detector import LicensePlateDetector
 
-# 🧩 각 주차 구역 자리마다 센서 핀(TRIG, ECHO) 설정
-sensor_pins = {
-    'T1A': [{'TRIG': 23, 'ECHO': 24}, {'TRIG': 27, 'ECHO': 22}, {'TRIG': 5,  'ECHO': 6}],
-    'T1B': [{'TRIG': 17, 'ECHO': 18}, {'TRIG': 12, 'ECHO': 16}, {'TRIG': 20, 'ECHO': 21}],
-    'T2A': [{'TRIG': 13, 'ECHO': 19}, {'TRIG': 26, 'ECHO': 4},  {'TRIG': 25, 'ECHO': 8}],
-    'T2B': [{'TRIG': 7,  'ECHO': 1},  {'TRIG': 9,  'ECHO': 10}, {'TRIG': 11, 'ECHO': 14}],
-    '전기차': [{'TRIG': 15, 'ECHO': 2}, {'TRIG': 3,  'ECHO': 28}, {'TRIG': 29, 'ECHO': 30}],
-    '장애인': [{'TRIG': 31, 'ECHO': 32}, {'TRIG': 33, 'ECHO': 34}, {'TRIG': 35, 'ECHO': 36}]
-}
+import carin
+import carout
 
-# 🅿️ 각 자리의 주차 상태를 저장 (0: 빈 자리, 1: 차량 있음)
-parking_zones = {
-    zone: [0, 0, 0] for zone in sensor_pins
-}
+def license_plate_loop():
+    detector = LicensePlateDetector()
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ 카메라를 열 수 없습니다.", flush=True)
+        return
 
-# 🧰 라즈베리파이 GPIO 설정
-GPIO.setmode(GPIO.BCM)        # BCM 번호 체계 사용
-GPIO.setwarnings(False)       # 경고 메시지 끄기
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("❌ 프레임 읽기 실패", flush=True)
+            break
 
-# 🔧 모든 센서 핀 초기화
-for zone in sensor_pins:
-    for sensor in sensor_pins[zone]:
-        GPIO.setup(sensor['TRIG'], GPIO.OUT)
-        GPIO.setup(sensor['ECHO'], GPIO.IN)
-        GPIO.output(sensor['TRIG'], False)  # TRIG 초기값은 LOW
+        frame, texts = detector.detect_from_frame(frame)
+        for text in texts:
+            print(f"🪪 번호판 인식: {text}", flush=True)
 
-time.sleep(2)  # 센서 안정화 대기
+        cv2.imshow("License Plate Recognition", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+def main():
+    t_in = threading.Thread(target=carin.listen_for_car_color_data, daemon=True)
+    t_out = threading.Thread(target=carout.sensor_loop, daemon=True)
+
+    t_in.start()
+    t_out.start()
+
+    license_plate_loop()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n프로그램 종료 중...", flush=True)
+
 
 # 📏 거리 측정 함수 (센서 하나에 대해 실행)
 def measure_distance(trig, echo):
